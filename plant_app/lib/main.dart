@@ -34,7 +34,7 @@ class _HomePageState extends State<HomePage> {
   Timer? periodicTimer;
 
   // Keys to display on the home-page card
-  final List<String> keysToShow = ['temperature', 'moisture'];
+  final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
 
   @override
   void initState() {
@@ -193,28 +193,34 @@ class _HomePageState extends State<HomePage> {
         itemCount: devices.length,
         itemBuilder: (context, index) {
           final device = devices[index];
-          // Get the latest key-value pair for display
-          String latestValue = '';
-          if (deviceData.containsKey(device['name'])) {
-            deviceData[device['name']]!.forEach((key, values) {
-              if (values.isNotEmpty) {
-                latestValue = values.last['value'].toString();
+          final deviceName = device['name'];
+
+          // Get the filtered latest values for the keys we want to show
+          List<Widget> keyValueWidgets = [];
+          if (deviceData.containsKey(deviceName)) {
+            deviceData[deviceName]!.forEach((key, values) {
+              if (keysToShow.contains(key) && values.isNotEmpty) {
+                String latestValue = values.last['value'].toString();
+                keyValueWidgets.add(Text('$key: $latestValue'));
               }
             });
           }
 
           return Card(
             child: ListTile(
-              title: Text(device['name']),
-              subtitle:
-                  Text(latestValue.isNotEmpty ? latestValue : 'No data yet'),
+              title: Text(deviceName),
+              // Display filtered key-value pairs as the subtitle
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: keyValueWidgets.isNotEmpty ? keyValueWidgets : [Text('No data yet')],
+              ),
               onTap: () {
                 Navigator.push(
                     context,
                     MaterialPageRoute(
                         builder: (context) => DeviceDetailPage(
                               device: device,
-                              deviceData: deviceData[device['name']] ?? {},
+                              deviceData: deviceData[deviceName] ?? {},
                             )));
               },
               trailing: IconButton(
@@ -384,6 +390,9 @@ class DeviceDetailPage extends StatelessWidget {
   final Map<String, dynamic> device;
   final Map<String, List<Map<String, dynamic>>> deviceData;
 
+  // Keys to display on graphs
+  final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
+
   DeviceDetailPage({required this.device, required this.deviceData});
 
   @override
@@ -397,9 +406,21 @@ class DeviceDetailPage extends StatelessWidget {
         ),
       ),
       body: ListView.builder(
-        itemCount: deviceData.keys.length,
+        itemCount: keysToShow.length,
         itemBuilder: (context, index) {
-          String key = deviceData.keys.elementAt(index);
+          String key = keysToShow[index];
+
+          // If theres no data for the key, skip rendering the graph
+          if (!deviceData.containsKey(key) || deviceData[key]!.isEmpty) {
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text('No data available for $key'),
+              ),
+            );
+          }
+
+          // Get the data points for the current key
           List<Map<String, dynamic>> dataPoints = deviceData[key]!;
 
           // Prepare data for the graph
