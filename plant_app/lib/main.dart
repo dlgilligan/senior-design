@@ -386,91 +386,366 @@ class AddDeviceDialog {
   }
 }
 
-class DeviceDetailPage extends StatelessWidget {
+
+class DeviceDetailPage extends StatefulWidget {
   final Map<String, dynamic> device;
   final Map<String, List<Map<String, dynamic>>> deviceData;
-
-  // Keys to display on graphs
-  final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
 
   DeviceDetailPage({required this.device, required this.deviceData});
 
   @override
+  _DeviceDetailPageState createState() => _DeviceDetailPageState();
+}
+
+class _DeviceDetailPageState extends State<DeviceDetailPage> {
+  final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
+  
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(device['name']),
+        title: Text(widget.device['name']),
         leading: IconButton(
           icon: Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: ListView.builder(
-        itemCount: keysToShow.length,
-        itemBuilder: (context, index) {
-          String key = keysToShow[index];
+      body: ListView(
+        children: [
+          // Existing code for displaying graphs
+          ...keysToShow.map((key) => _buildGraphCard(key)).toList(),
 
-          // If theres no data for the key, skip rendering the graph
-          if (!deviceData.containsKey(key) || deviceData[key]!.isEmpty) {
-            return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Text('No data available for $key'),
+          // Card for Scheduled Waterings
+          _buildScheduledWateringsCard(),
+
+          // Buttons for "Water" and "Schedule Watering"
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              ElevatedButton(
+                onPressed: _confirmWaterNow,
+                child: Text('Water'),
               ),
-            );
-          }
-
-          // Get the data points for the current key
-          List<Map<String, dynamic>> dataPoints = deviceData[key]!;
-
-          // Prepare data for the graph
-          List<FlSpot> spots = dataPoints.map((entry) {
-            return FlSpot(
-              DateTime.parse(entry['timestamp']).millisecondsSinceEpoch.toDouble(),
-              entry['value'].toDouble(),
-            );
-          }).toList();
-
-          return Card(
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                children: [
-                  Text(key, style: TextStyle(fontSize: 20)),
-                  Container(
-                    height: 200,
-                    child: LineChart(
-                      LineChartData(
-                        titlesData: FlTitlesData(
-                          leftTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: true),
-                          ),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: true),
-                          ),
-                        ),
-                        borderData: FlBorderData(show: true),
-                        gridData: FlGridData(show: true),
-                        lineBarsData: [
-                          LineChartBarData(
-                            spots: spots,
-                            isCurved: true,
-                            gradient: LinearGradient(
-                              colors: [Colors.blue],  // Use gradient instead of colors
-                            ),
-                            dotData: FlDotData(show: false),
-                            belowBarData: BarAreaData(show: false),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+              ElevatedButton(
+                onPressed: _scheduleWatering,
+                child: Text('Schedule Watering'),
               ),
-            ),
-          );
-        },
+            ],
+          ),
+        ],
       ),
     );
+  }
+
+  // Method to build the graph cards
+  Widget _buildGraphCard(String key) {
+    if (!widget.deviceData.containsKey(key) || widget.deviceData[key]!.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('No data available for $key'),
+        ),
+      );
+    }
+
+    List<Map<String, dynamic>> dataPoints = widget.deviceData[key]!;
+    String mostRecentValue = dataPoints.last['value'].toString();
+    List<FlSpot> spots = dataPoints.map((entry) {
+      return FlSpot(
+        DateTime.parse(entry['timestamp']).millisecondsSinceEpoch.toDouble(),
+        entry['value'].toDouble(),
+      );
+    }).toList();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$key - Latest Value: $mostRecentValue',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            Container(
+              height: 200,
+              child: LineChart(
+                LineChartData(
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: true),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: true),
+                    ),
+                  ),
+                  borderData: FlBorderData(show: true),
+                  gridData: FlGridData(show: true),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots,
+                      isCurved: true,
+                      gradient: LinearGradient(colors: [Colors.blue]),
+                      dotData: FlDotData(show: false),
+                      belowBarData: BarAreaData(show: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Method to build the Scheduled Waterings card
+  Widget _buildScheduledWateringsCard() {
+    List<Map<String, dynamic>>? schedules = widget.deviceData['schedules'];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Scheduled Waterings',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            if (schedules == null || schedules.isEmpty)
+              Text('No scheduled waterings')
+            else
+              ...schedules.map((schedule) => Text(
+                  'Water at ${DateTime.fromMillisecondsSinceEpoch(schedule['time']).toLocal()}')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Confirm Water Now button press
+  void _confirmWaterNow() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Confirm Watering'),
+        content: Text('Are you sure you want to water now?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // Close the dialog
+              _waterNow(); // Call water now method
+            },
+            child: Text('Yes'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Method to send water-now request
+  Future<void> _waterNow() async {
+    final identifier = widget.device['identifier'];
+    final url = Uri.parse('http://example.com/water');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        "type": "water-now",
+        "identifier": identifier,
+      }),
+    );
+    if (response.statusCode == 200) {
+      print('Watering request sent successfully');
+    }
+  }
+
+  // Method to open the Schedule Watering dialog
+  void _scheduleWatering() {
+    showDialog(
+      context: context,
+      builder: (context) => ScheduleWateringDialog(
+        deviceIdentifier: widget.device['identifier'],
+        onScheduleAdded: _addSchedule,
+      ),
+    );
+  }
+
+  // Callback for when a new schedule is added
+  void _addSchedule(Map<String, dynamic> schedule) {
+    setState(() {
+      if (!widget.deviceData.containsKey('schedules')) {
+        widget.deviceData['schedules'] = [];
+      }
+      widget.deviceData['schedules']!.add(schedule);
+    });
+  }
+}
+
+class ScheduleWateringDialog extends StatefulWidget {
+  final String deviceIdentifier;
+  final Function(Map<String, dynamic>) onScheduleAdded;
+
+  ScheduleWateringDialog({required this.deviceIdentifier, required this.onScheduleAdded});
+
+  @override
+  _ScheduleWateringDialogState createState() => _ScheduleWateringDialogState();
+}
+
+class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
+  TimeOfDay? selectedTime;
+  bool isRepeating = false;
+  List<String> selectedDays = [];
+  DateTime? endDate;
+
+  final List<String> allDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Schedule Watering'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Time picker for selecting a time
+          ListTile(
+            title: Text(selectedTime != null ? 'Time: ${selectedTime!.format(context)}' : 'Select Time'),
+            onTap: _pickTime,
+          ),
+          // Checkbox for repeating option
+          CheckboxListTile(
+            title: Text('Repeat'),
+            value: isRepeating,
+            onChanged: (value) {
+              setState(() {
+                isRepeating = value ?? false;
+              });
+            },
+          ),
+          if (isRepeating) ...[
+            // Dropdown to select repeating days
+            Wrap(
+              spacing: 10,
+              children: allDays.map((day) {
+                return FilterChip(
+                  label: Text(day),
+                  selected: selectedDays.contains(day),
+                  onSelected: (selected) {
+                    setState(() {
+                      if (selected) {
+                        selectedDays.add(day);
+                      } else {
+                        selectedDays.remove(day);
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+            // Date picker to select an end date
+            ListTile(
+              title: Text(endDate != null ? 'End Date: ${endDate!.toLocal()}' : 'Select End Date'),
+              onTap: _pickEndDate,
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _schedule,
+          child: Text('Schedule'),
+        ),
+      ],
+    );
+  }
+
+  // Time picker for selecting time
+  Future<void> _pickTime() async {
+    TimeOfDay? picked = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+    if (picked != null) {
+      setState(() {
+        selectedTime = picked;
+      });
+    }
+  }
+
+  // Date picker for selecting end date
+  Future<void> _pickEndDate() async {
+    DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime.now(),
+      lastDate: DateTime(DateTime.now().year + 5),
+    );
+    if (picked != null) {
+      setState(() {
+        endDate = picked;
+      });
+    }
+  }
+
+  // Method to schedule watering
+  Future<void> _schedule() async {
+    if (selectedTime == null) {
+      // Show an error message or warning that time is not selected
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Error'),
+          content: Text('Please select a time for the watering schedule'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    DateTime now = DateTime.now();
+    DateTime scheduleTime = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      selectedTime!.hour,
+      selectedTime!.minute,
+    );
+
+    Map<String, dynamic> schedule = {
+      "type": "water-schedule",
+      "repeating": isRepeating,
+      "time": scheduleTime.millisecondsSinceEpoch,
+    };
+
+    if (isRepeating) {
+      schedule["days"] = selectedDays;
+      schedule["end-date"] = endDate?.millisecondsSinceEpoch;
+    }
+
+    // Send POST request to schedule watering
+    final url = Uri.parse('http://example.com/schedule');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(schedule),
+    );
+
+    if (response.statusCode == 200) {
+      widget.onScheduleAdded(schedule); // Update parent with new schedule
+      Navigator.pop(context); // Close the dialog
+    }
   }
 }
