@@ -121,7 +121,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _sendHttpRequest(String deviceName, String identifier) async {
-    final url = Uri.parse('http://example.com/?UID=$identifier');
+    final url = Uri.parse('http://example.com/data/$identifier');
     final response = await http.get(url);
     if (response.statusCode == 200) {
       DateTime now = DateTime.now();
@@ -399,7 +399,7 @@ class DeviceDetailPage extends StatefulWidget {
 
 class _DeviceDetailPageState extends State<DeviceDetailPage> {
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -553,13 +553,12 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Method to send water-now request
   Future<void> _waterNow() async {
     final identifier = widget.device['identifier'];
-    final url = Uri.parse('http://example.com/water');
+    final url = Uri.parse('http://example.com/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
       body: json.encode({
         "type": "water-now",
-        "identifier": identifier,
       }),
     );
     if (response.statusCode == 200) {
@@ -736,7 +735,8 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
     }
 
     // Send POST request to schedule watering
-    final url = Uri.parse('http://example.com/schedule');
+    final identifier = widget.deviceIdentifier; // Get device UID
+    final url = Uri.parse('http://example.com/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
