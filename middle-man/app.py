@@ -32,15 +32,15 @@ def put_data(identifier):
     # Update the data for the identifier
     data_store[identifier]['data'] = data
 
-
+    # Check if there are any commands stored
     if len(data_store[identifier]['commands']) > 0:
         # Get the commands and clear the array
         commands = data_store[identifier]['commands']
-        data_store[identifier]['commands'] = []
+        data_store[identifier]['commands'] = [] # Clear commands
 
         return jsonify({
             'message': 'Data received',
-            'command': commands
+            'commands': commands
         }), 200
     else:
         return jsonify({'message': 'Data received'}), 201
@@ -57,10 +57,10 @@ def get_data(identifier):
 @app.route('/command/<identifier>', methods=['POST'])
 def post_command(identifier):
     # Check if identifier exists in the store
-    command_data = request.json.get('command')
+    command_data = request.json
 
-    if not command_data:
-        return jsonify({'error': 'Missing command'}), 400
+    if 'type' not in command_data:
+        return jsonify({'error': 'Missing command type'}), 400
 
     # Check if identifier exists in the store
     if identifier not in data_store:
@@ -73,6 +73,6 @@ def post_command(identifier):
     data_store[identifier]['commands'].append(command_data)
 
     return jsonify({
-        'message': 'Command added'
-    })
+        'message': f'Command "{command_data["type"]}" added for {identifier}'
+    }), 200
 
