@@ -254,14 +254,44 @@ class AddDeviceDialog {
   AddDeviceDialog({required this.onDeviceAdded});
 
   Future<void> _searchForDevice(BuildContext context, setState) async {
+    // Check if all fields are filled
+    if (_deviceNameController.text.isEmpty || _ssidController.text.isEmpty || _passwordController.text.isEmpty) {
+      setState(() {
+        errorMessage = 'All fields are required';
+      });
+      return;
+    }
+
     setState(() {
       searching = true;
       errorMessage = null;
     });
 
-    final result = await flutterReactiveBle.scanForDevices(
-        withServices: [Uuid.parse('PLACEHOLDER')],
-        scanMode: ScanMode.lowLatency).first;
+    // Create a completer to handle the timeout
+    Completer<DiscoveredDevice?> completer = Completer<DiscoveredDevice?>();
+
+    // Start the device scan
+    StreamSubscription<DiscoveredDevice>? subscription;
+    subscription = flutterReactiveBle.scanForDevices(
+      withServices: [Uuid.parse('PLACEHOLDER')],
+      scanMode: ScanMode.lowLatency,
+    ).listen((device) {
+      if (!completer.isCompleted) {
+        completer.complete(device);
+        subscription?.cancel();
+      }
+    });
+
+    // Set up a timeout
+    Timer(Duration(seconds: 10), () {
+      if (!completer.isCompleted) {
+        completer.complete(null);
+        subscription?.cancel();
+      }
+    });
+
+    // Wait for the result
+    DiscoveredDevice? result = await completer.future;
 
     if (result == null) {
       setState(() {
