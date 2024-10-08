@@ -185,7 +185,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     periodicTimer?.cancel();
-    deviceDataStreamController.close()
+    deviceDataStreamController.close();
     super.dispose();
   }
 
@@ -449,7 +449,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       if (mounted) {
         setState(() {
           deviceData = updatedData[widget.device['name']] ?? {};
-        })
+        });
       }
     });
   }
@@ -493,7 +493,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the graph cards
   Widget _buildGraphCard(String key) {
-    if (!widget.deviceData.containsKey(key) || widget.deviceData[key]!.isEmpty) {
+    if (deviceData.containsKey(key) || deviceData[key]!.isEmpty) {
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -502,7 +502,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
-    List<Map<String, dynamic>> dataPoints = widget.deviceData[key]!;
+    List<Map<String, dynamic>> dataPoints = deviceData[key]!;
     String mostRecentValue = dataPoints.last['value'].toString();
     List<FlSpot> spots = dataPoints.map((entry) {
       return FlSpot(
@@ -556,7 +556,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the Scheduled Waterings card
   Widget _buildScheduledWateringsCard() {
-    List<Map<String, dynamic>>? schedules = widget.deviceData['schedules'];
+    List<Map<String, dynamic>>? schedules = deviceData['schedules'];
 
     return Card(
       child: Padding(
@@ -634,10 +634,10 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Callback for when a new schedule is added
   void _addSchedule(Map<String, dynamic> schedule) {
     setState(() {
-      if (!widget.deviceData.containsKey('schedules')) {
-        widget.deviceData['schedules'] = [];
+      if (deviceData.containsKey('schedules')) {
+        deviceData['schedules'] = [];
       }
-      widget.deviceData['schedules']!.add(schedule);
+      deviceData['schedules']!.add(schedule);
     });
   }
 }
