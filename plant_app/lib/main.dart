@@ -36,6 +36,9 @@ class _HomePageState extends State<HomePage> {
   // Keys to display on the home-page card
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
 
+  // Stream controller to broadcast device updates
+  final StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>> deviceDataStreamController = StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>>.broadcast();
+
   @override
   void initState() {
     super.initState();
@@ -147,6 +150,9 @@ class _HomePageState extends State<HomePage> {
           }).toList();
         });
       });
+
+      // Send updated data through the stream
+      deviceDataStreamController.add(deviceData);
     }
   }
 
@@ -179,6 +185,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     periodicTimer?.cancel();
+    deviceDataStreamController.close()
     super.dispose();
   }
 
@@ -220,7 +227,8 @@ class _HomePageState extends State<HomePage> {
                     MaterialPageRoute(
                         builder: (context) => DeviceDetailPage(
                               device: device,
-                              deviceData: deviceData[deviceName] ?? {},
+                              initialDeviceData: deviceData[deviceName] ?? {},
+                              deviceDataStream: deviceDataStreamController.stream,
                             )));
               },
               trailing: IconButton(
@@ -419,16 +427,32 @@ class AddDeviceDialog {
 
 class DeviceDetailPage extends StatefulWidget {
   final Map<String, dynamic> device;
-  final Map<String, List<Map<String, dynamic>>> deviceData;
+  final Map<String, List<Map<String, dynamic>>> initialDeviceData;
+  final Stream<Map<String, Map<String, List<Map<String, dynamic>>>>> deviceDataStream;
 
-  DeviceDetailPage({required this.device, required this.deviceData});
+  DeviceDetailPage({required this.device, required this.initialDeviceData, required this.deviceDataStream});
 
   @override
   _DeviceDetailPageState createState() => _DeviceDetailPageState();
 }
 
 class _DeviceDetailPageState extends State<DeviceDetailPage> {
+  late Map<String, List<Map<String, dynamic>>> deviceData;
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
+
+  @override
+  void initState() {
+    super.initState();
+    deviceData = widget.initialDeviceData;
+    // Listen to the stream for updates
+    widget.deviceDataStream.listen((updatedData) {
+      if (mounted) {
+        setState(() {
+          deviceData = updatedData[widget.device['name']] ?? {};
+        })
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -516,7 +540,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                     LineChartBarData(
                       spots: spots,
                       isCurved: true,
-                      gradient: LinearGradient(colors: [Colors.blue]),
+                      color: Colors.blue,
                       dotData: FlDotData(show: false),
                       belowBarData: BarAreaData(show: false),
                     ),
