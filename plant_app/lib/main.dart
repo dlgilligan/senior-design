@@ -28,7 +28,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final flutterReactiveBle = FlutterReactiveBle();
+  final flutterReactiveBle = FlutterReactiveBle(); // Do I need this?
   List<Map<String, dynamic>> devices = [];
   Map<String, Map<String, List<Map<String, dynamic>>>> deviceData = {};
   Timer? periodicTimer;
@@ -37,7 +37,9 @@ class _HomePageState extends State<HomePage> {
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
 
   // Stream controller to broadcast device updates
-  final StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>> deviceDataStreamController = StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>>.broadcast();
+  final StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>>
+      deviceDataStreamController = StreamController<
+          Map<String, Map<String, List<Map<String, dynamic>>>>>.broadcast();
 
   @override
   void initState() {
@@ -219,7 +221,9 @@ class _HomePageState extends State<HomePage> {
               // Display filtered key-value pairs as the subtitle
               subtitle: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: keyValueWidgets.isNotEmpty ? keyValueWidgets : [Text('No data yet')],
+                children: keyValueWidgets.isNotEmpty
+                    ? keyValueWidgets
+                    : [Text('No data yet')],
               ),
               onTap: () {
                 Navigator.push(
@@ -228,7 +232,8 @@ class _HomePageState extends State<HomePage> {
                         builder: (context) => DeviceDetailPage(
                               device: device,
                               initialDeviceData: deviceData[deviceName] ?? {},
-                              deviceDataStream: deviceDataStreamController.stream,
+                              deviceDataStream:
+                                  deviceDataStreamController.stream,
                             )));
               },
               trailing: IconButton(
@@ -263,7 +268,9 @@ class AddDeviceDialog {
 
   Future<void> _searchForDevice(BuildContext context, setState) async {
     // Check if all fields are filled
-    if (_deviceNameController.text.isEmpty || _ssidController.text.isEmpty || _passwordController.text.isEmpty) {
+    if (_deviceNameController.text.isEmpty ||
+        _ssidController.text.isEmpty ||
+        _passwordController.text.isEmpty) {
       setState(() {
         errorMessage = 'All fields are required';
       });
@@ -278,15 +285,18 @@ class AddDeviceDialog {
     // Create a completer to handle the timeout
     Completer<DiscoveredDevice?> completer = Completer<DiscoveredDevice?>();
 
+    final List<String> devicesFound = [];
     // Start the device scan
     StreamSubscription<DiscoveredDevice>? subscription;
     subscription = flutterReactiveBle.scanForDevices(
-      withServices: [Uuid.parse('PLACEHOLDER')],
+      withServices: [],
       scanMode: ScanMode.lowLatency,
     ).listen((device) {
-      if (!completer.isCompleted) {
+      if (!completer.isCompleted && device.name == 'Team22_nimBLE') {
         completer.complete(device);
         subscription?.cancel();
+      } else if (!devicesFound.contains(device.name)) {
+        devicesFound.add(device.name);
       }
     });
 
@@ -300,6 +310,7 @@ class AddDeviceDialog {
 
     // Wait for the result
     DiscoveredDevice? result = await completer.future;
+    print('Devices Found: $devicesFound');
 
     if (result == null) {
       setState(() {
@@ -337,8 +348,8 @@ class AddDeviceDialog {
   Future<void> _sendDataOverBLE(
       String deviceId, String ssid, String password, String identifier) async {
     // Define the service and characteristic UUIDs.
-    final serviceUUID = Uuid.parse('PLACEHOLDER');
-    final characteristicUUID = Uuid.parse('PLACEHOLDER');
+    final serviceUUID = Uuid.parse('78563412000000000000000000000000');
+    final characteristicUUID = Uuid.parse('21436587000000000000000000000000');
 
     // Connect to the device.
     final connection = flutterReactiveBle
@@ -364,13 +375,18 @@ class AddDeviceDialog {
   Future<void> _writeData(String deviceId, String ssid, String password,
       String identifier, Uuid serviceUUID, Uuid characteristicUUID) async {
     final data = utf8.encode('$ssid,$password,$identifier');
-    await flutterReactiveBle.writeCharacteristicWithoutResponse(
-        QualifiedCharacteristic(
-          serviceId: serviceUUID,
-          characteristicId: characteristicUUID,
-          deviceId: deviceId,
-        ),
-        value: data);
+    try {
+      await flutterReactiveBle.writeCharacteristicWithoutResponse(
+          QualifiedCharacteristic(
+            serviceId: serviceUUID,
+            characteristicId: characteristicUUID,
+            deviceId: deviceId,
+          ),
+          value: data);
+      print('Data written over BLE with response');
+    } catch (e) {
+      print('BLE write failed with error ${e}');
+    }
   }
 
   void show(BuildContext context) {
@@ -424,13 +440,16 @@ class AddDeviceDialog {
   }
 }
 
-
 class DeviceDetailPage extends StatefulWidget {
   final Map<String, dynamic> device;
   final Map<String, List<Map<String, dynamic>>> initialDeviceData;
-  final Stream<Map<String, Map<String, List<Map<String, dynamic>>>>> deviceDataStream;
+  final Stream<Map<String, Map<String, List<Map<String, dynamic>>>>>
+      deviceDataStream;
 
-  DeviceDetailPage({required this.device, required this.initialDeviceData, required this.deviceDataStream});
+  DeviceDetailPage(
+      {required this.device,
+      required this.initialDeviceData,
+      required this.deviceDataStream});
 
   @override
   _DeviceDetailPageState createState() => _DeviceDetailPageState();
@@ -493,7 +512,13 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the graph cards
   Widget _buildGraphCard(String key) {
-    if (deviceData.containsKey(key) || deviceData[key]!.isEmpty) {
+    print('=== Debug: Building graph card for key: $key ===');
+    print('1. Current deviceData: $deviceData');
+    print('2. Keys in deviceData: ${deviceData.keys.toList()}');
+
+    // First check if the key doesn't exist or if the data is null
+    if (deviceData.containsKey(key) || deviceData[key] == null) {
+      print('3. Early return: key missing or null');
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -502,14 +527,35 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
+    print('4. Retrieved data for key: ${deviceData[key]}');
     List<Map<String, dynamic>> dataPoints = deviceData[key]!;
+    print('5. DataPoints length: ${dataPoints.length}');
+
+    // just in case check if the data points list is empty, previously had an error here
+    // Check if the change earlier in the code is enough.
+    if (dataPoints.isEmpty) {
+      print('6. Early return: dataPoints is empty');
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('No data available for $key'),
+        ),
+      );
+    }
+
+    print('7. Last dataPoint: ${dataPoints.last}');
     String mostRecentValue = dataPoints.last['value'].toString();
+    print('8. mostRecentValue: $mostRecentValue');
+
+    print('9. Creating FlSpots...');
     List<FlSpot> spots = dataPoints.map((entry) {
+      print('10. Processing entry: $entry');
       return FlSpot(
         DateTime.parse(entry['timestamp']).millisecondsSinceEpoch.toDouble(),
         entry['value'].toDouble(),
       );
     }).toList();
+    print('11. FlSpots created: ${spots.length} spots');
 
     return Card(
       child: Padding(
@@ -646,7 +692,8 @@ class ScheduleWateringDialog extends StatefulWidget {
   final String deviceIdentifier;
   final Function(Map<String, dynamic>) onScheduleAdded;
 
-  ScheduleWateringDialog({required this.deviceIdentifier, required this.onScheduleAdded});
+  ScheduleWateringDialog(
+      {required this.deviceIdentifier, required this.onScheduleAdded});
 
   @override
   _ScheduleWateringDialogState createState() => _ScheduleWateringDialogState();
@@ -658,7 +705,15 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
   List<String> selectedDays = [];
   DateTime? endDate;
 
-  final List<String> allDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  final List<String> allDays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday'
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -669,7 +724,9 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
         children: [
           // Time picker for selecting a time
           ListTile(
-            title: Text(selectedTime != null ? 'Time: ${selectedTime!.format(context)}' : 'Select Time'),
+            title: Text(selectedTime != null
+                ? 'Time: ${selectedTime!.format(context)}'
+                : 'Select Time'),
             onTap: _pickTime,
           ),
           // Checkbox for repeating option
@@ -704,7 +761,9 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
             ),
             // Date picker to select an end date
             ListTile(
-              title: Text(endDate != null ? 'End Date: ${endDate!.toLocal()}' : 'Select End Date'),
+              title: Text(endDate != null
+                  ? 'End Date: ${endDate!.toLocal()}'
+                  : 'Select End Date'),
               onTap: _pickEndDate,
             ),
           ],
@@ -725,7 +784,8 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
   // Time picker for selecting time
   Future<void> _pickTime() async {
-    TimeOfDay? picked = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+    TimeOfDay? picked =
+        await showTimePicker(context: context, initialTime: TimeOfDay.now());
     if (picked != null) {
       setState(() {
         selectedTime = picked;
