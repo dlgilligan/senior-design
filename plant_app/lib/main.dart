@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:crypto/crypto.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:intl/intl.dart';
 
 void main() {
   runApp(MyApp());
@@ -28,7 +29,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final flutterReactiveBle = FlutterReactiveBle(); // Do I need this?
+  //final flutterReactiveBle = FlutterReactiveBle(); // Do I need this?
   List<Map<String, dynamic>> devices = [];
   Map<String, Map<String, List<Map<String, dynamic>>>> deviceData = {};
   Timer? periodicTimer;
@@ -44,7 +45,9 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _checkPermissions(); // Check permissions on startup
+    _loadDevices().then((_) {
+      _checkPermissions(); // Check permissions on startup
+    });
   }
 
   Future<void> _checkPermissions() async {
@@ -97,6 +100,29 @@ class _HomePageState extends State<HomePage> {
           .cast<Map<String, dynamic>>();
     }
 
+    // Load device data
+    for (var device in devices) {
+      String? savedData = prefs.getString('deviceData_${device['name']}');
+      if (savedData != null) {
+        Map<String, dynamic> decodedData = json.decode(savedData);
+        deviceData[device['name']] = {};
+
+        decodedData.forEach((key, value) {
+          List<dynamic> dataList = value as List<dynamic>;
+          deviceData[device['name']]![key] = dataList
+              .map((item) => {
+                    'value': item['value'], 
+                    'timestamp': item['timestamp'],
+                  })
+              .toList()
+              .cast<Map<String, dynamic>>();
+        });
+
+        // Clean up old data on load
+        _cleanOldData(device['name']);
+      }
+    }
+
     if (devices.isNotEmpty) {
       _startPeriodicRequests();
     }
@@ -104,10 +130,31 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  Future<void> _saveDevices() async {
+  Future<void> _saveDeviceData() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    // Save devices list
     List<String> savedDevices = devices.map((d) => json.encode(d)).toList();
     prefs.setStringList('devices', savedDevices);
+
+    // Save device data
+    for (var entry in deviceData.entries) {
+      String deviceName = entry.key;
+      Map<String, List<Map<String, dynamic>>> data = entry.value;
+
+      await prefs.setString('deviceData_${deviceName}', json.encode(data));
+    }
+  }
+
+  void _cleanOldData(String deviceName) {
+    DateTime now = DateTime.now();
+
+    deviceData[deviceName]?.forEach((key, valuesList) {
+      deviceData[deviceName]![key] = valuesList.where((entry) {
+        DateTime entryTime = DateTime.parse(entry['timestamp']);
+        return now.difference(entryTime).inHours < 24;
+      }).toList();
+    });
   }
 
   void _startPeriodicRequests() {
@@ -126,8 +173,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _sendHttpRequest(String deviceName, String identifier) async {
-    final url = Uri.parse('http://example.com/data/$identifier');
+    final url = Uri.parse('http://10.0.2.2:5000/data/$identifier');
     final response = await http.get(url);
+
     if (response.statusCode == 200) {
       DateTime now = DateTime.now();
 
@@ -141,16 +189,15 @@ class _HomePageState extends State<HomePage> {
         responseData.forEach((key, value) {
           deviceData[deviceName]!.putIfAbsent(key, () => []);
           // Add new response to the list
-          deviceData[deviceName]![key]!
-              .add({'value': value, 'timestamp': now.toIso8601String()});
-
-          // Remove responses older than 24 hours
-          deviceData[deviceName]![key] =
-              deviceData[deviceName]![key]!.where((entry) {
-            DateTime entryTime = DateTime.parse(entry['timestamp']);
-            return now.difference(entryTime).inHours < 24;
-          }).toList();
+          deviceData[deviceName]![key]!.add({
+            'value': value,
+            'timestamp': now.toIso8601String()
+          });
         });
+
+        // Clean up old data and save
+        _cleanOldData(deviceName);
+        _saveDeviceData();
       });
 
       // Send updated data through the stream
@@ -161,7 +208,7 @@ class _HomePageState extends State<HomePage> {
   void _addDevice(Map<String, dynamic> newDevice) {
     setState(() {
       devices.insert(0, newDevice);
-      _saveDevices();
+      _saveDeviceData();
     });
 
     if (devices.isNotEmpty) {
@@ -172,7 +219,8 @@ class _HomePageState extends State<HomePage> {
   void _removeDevice(Map<String, dynamic> device) {
     setState(() {
       devices.remove(device);
-      _saveDevices();
+      deviceData.remove(device['name']); // Also remove the device's data
+      _saveDeviceData();
 
       if (devices.isEmpty) {
         _stopPeriodicRequests();
@@ -260,7 +308,7 @@ class AddDeviceDialog {
   final _deviceNameController = TextEditingController();
   final _ssidController = TextEditingController();
   final _passwordController = TextEditingController();
-  final flutterReactiveBle = FlutterReactiveBle();
+  //final flutterReactiveBle = FlutterReactiveBle();
   bool searching = false;
   String? errorMessage;
 
@@ -282,37 +330,43 @@ class AddDeviceDialog {
       errorMessage = null;
     });
 
-    // Create a completer to handle the timeout
-    Completer<DiscoveredDevice?> completer = Completer<DiscoveredDevice?>();
+    // Simulate bluetooth device search
+    await Future.delayed(Duration(seconds: 2));
 
-    final List<String> devicesFound = [];
+    // Create a completer to handle the timeout
+    //Completer<DiscoveredDevice?> completer = Completer<DiscoveredDevice?>();
+
+    //final List<String> devicesFound = [];
     // Start the device scan
-    StreamSubscription<DiscoveredDevice>? subscription;
-    subscription = flutterReactiveBle.scanForDevices(
-      withServices: [],
-      scanMode: ScanMode.lowLatency,
-    ).listen((device) {
-      if (!completer.isCompleted && device.name == 'Team22_nimBLE') {
-        completer.complete(device);
-        subscription?.cancel();
-      } else if (!devicesFound.contains(device.name)) {
-        devicesFound.add(device.name);
-      }
-    });
+    //StreamSubscription<DiscoveredDevice>? subscription;
+    //subscription = flutterReactiveBle.scanForDevices(
+    //  withServices: [],
+    //  scanMode: ScanMode.lowLatency,
+    //).listen((device) {
+    //  if (!completer.isCompleted && device.name == 'Team22_nimBLE') {
+    //    completer.complete(device);
+    //    subscription?.cancel();
+    //  } else if (!devicesFound.contains(device.name)) {
+    //    devicesFound.add(device.name);
+    //  }
+    //});
 
     // Set up a timeout
-    Timer(Duration(seconds: 10), () {
-      if (!completer.isCompleted) {
-        completer.complete(null);
-        subscription?.cancel();
-      }
-    });
+    //Timer(Duration(seconds: 10), () {
+    //  if (!completer.isCompleted) {
+    //    completer.complete(null);
+    //    subscription?.cancel();
+    //  }
+    //});
 
     // Wait for the result
-    DiscoveredDevice? result = await completer.future;
-    print('Devices Found: $devicesFound');
+    //DiscoveredDevice? result = await completer.future;
+    //print('Devices Found: $devicesFound');
 
-    if (result == null) {
+    // Simulate finding a device
+    bool deviceFound = true;
+
+    if (!deviceFound) {
       setState(() {
         errorMessage = 'No device found!';
         searching = false;
@@ -323,11 +377,12 @@ class AddDeviceDialog {
     // Generate hash identifier
     final deviceName = _deviceNameController.text;
     final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-    final identifier = _generateHash(deviceName + timestamp);
+    final identifier = 'device123';
 
     // Send SSID, password, and identifier over BLE to the device
-    await _sendDataOverBLE(
-        result.id, _ssidController.text, _passwordController.text, identifier);
+    //await _sendDataOverBLE(
+    //    result.id, _ssidController.text, _passwordController.text, identifier);
+    await _simulateSendDataOverBLE(_ssidController.text, _passwordController.text, identifier);
 
     // Add the device
     onDeviceAdded({
@@ -340,54 +395,60 @@ class AddDeviceDialog {
     Navigator.of(context).pop();
   }
 
-  String _generateHash(String input) {
-    final bytes = utf8.encode(input);
-    return sha256.convert(bytes).toString();
+  Future<void> _simulateSendDataOverBLE(String ssid, String password, String identifier) async {
+    // Simulate a delay for send data over BLE
+    await Future.delayed(Duration(seconds: 1));
+    print('Simulated BLE data sent: SSID=$ssid, Password=$password, Identifier=$identifier');
   }
 
-  Future<void> _sendDataOverBLE(
-      String deviceId, String ssid, String password, String identifier) async {
+  //String _generateHash(String input) {
+  //  final bytes = utf8.encode(input);
+  //  return sha256.convert(bytes).toString();
+  //}
+
+  //Future<void> _sendDataOverBLE(
+  //    String deviceId, String ssid, String password, String identifier) async {
     // Define the service and characteristic UUIDs.
-    final serviceUUID = Uuid.parse('78563412000000000000000000000000');
-    final characteristicUUID = Uuid.parse('21436587000000000000000000000000');
+  //  final serviceUUID = Uuid.parse('78563412000000000000000000000000');
+  //  final characteristicUUID = Uuid.parse('21436587000000000000000000000000');
 
     // Connect to the device.
-    final connection = flutterReactiveBle
-        .connectToDevice(id: deviceId)
-        .listen((connectionState) {
-      if (connectionState.connectionState == DeviceConnectionState.connected) {
+  //  final connection = flutterReactiveBle
+  //      .connectToDevice(id: deviceId)
+  //      .listen((connectionState) {
+  //    if (connectionState.connectionState == DeviceConnectionState.connected) {
         // Connected to the device, now write the data.
-        _writeData(deviceId, ssid, password, identifier, serviceUUID,
-            characteristicUUID);
-      } else if (connectionState.connectionState ==
-          DeviceConnectionState.disconnected) {
+  //      _writeData(deviceId, ssid, password, identifier, serviceUUID,
+  //          characteristicUUID);
+  //    } else if (connectionState.connectionState ==
+  //        DeviceConnectionState.disconnected) {
         // Handle disconnection if needed
-        print('Disconnected from device $deviceId');
-      }
-    });
+  //      print('Disconnected from device $deviceId');
+  //    }
+  //  });
 
     // Cancel the connection listener after use.
-    Future.delayed(Duration(seconds: 5), () {
-      connection.cancel();
-    });
-  }
+  //  Future.delayed(Duration(seconds: 5), () {
+  //    connection.cancel();
+  //  });
+  //}
 
-  Future<void> _writeData(String deviceId, String ssid, String password,
-      String identifier, Uuid serviceUUID, Uuid characteristicUUID) async {
-    final data = utf8.encode('$ssid,$password,$identifier');
-    try {
-      await flutterReactiveBle.writeCharacteristicWithoutResponse(
-          QualifiedCharacteristic(
-            serviceId: serviceUUID,
-            characteristicId: characteristicUUID,
-            deviceId: deviceId,
-          ),
-          value: data);
-      print('Data written over BLE with response');
-    } catch (e) {
-      print('BLE write failed with error ${e}');
-    }
-  }
+  //Future<void> _writeData(String deviceId, String ssid, String password,
+  //    String identifier, Uuid serviceUUID, Uuid characteristicUUID) async {
+  //  final data = utf8.encode('$ssid,$password,$identifier');
+  //  try {
+  //    await flutterReactiveBle.writeCharacteristicWithoutResponse(
+  //        QualifiedCharacteristic(
+  //          serviceId: serviceUUID,
+  //          characteristicId: characteristicUUID,
+  //          deviceId: deviceId,
+  //        ),
+  //        value: data);
+  //    print('Data written over BLE with response');
+  //  } catch (e) {
+  //    print('BLE write failed with error ${e}');
+  //  }
+  //}
 
   void show(BuildContext context) {
     showDialog(
@@ -509,6 +570,10 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       ),
     );
   }
+  
+  double getRoundedMaxY(double actualMaxY) {
+    return (actualMaxY / 5).ceil() * 5;
+  }
 
   // Method to build the graph cards
   Widget _buildGraphCard(String key) {
@@ -517,7 +582,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     print('2. Keys in deviceData: ${deviceData.keys.toList()}');
 
     // First check if the key doesn't exist or if the data is null
-    if (deviceData.containsKey(key) || deviceData[key] == null) {
+    if (!deviceData.containsKey(key) || deviceData[key] == null) {
       print('3. Early return: key missing or null');
       return Card(
         child: Padding(
@@ -557,9 +622,13 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     }).toList();
     print('11. FlSpots created: ${spots.length} spots');
 
+    // Calculate maxY
+    double maxY = spots.map((spot) => spot.y).reduce((a,b) => a > b ? a : b);
+    maxY = getRoundedMaxY(maxY);
+
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(8.0),
+        padding: const EdgeInsets.only(left: 14.0, right: 0.0, top: 8.0, bottom: 8.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -572,12 +641,29 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
               height: 200,
               child: LineChart(
                 LineChartData(
+                  minX: spots.first.x,
+                  maxX: spots.last.x,
+                  minY: 0,
+                  maxY: maxY,
                   titlesData: FlTitlesData(
+                    topTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
                     leftTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true),
+                      sideTitles: SideTitles(showTitles: false),
                     ),
                     bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true),
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        interval: (spots.length == 1) ? 1 : (spots.last.x - spots.first.x), // Show only first and last labels
+                        getTitlesWidget: (value, meta) {
+                          if (value == spots.first.x || value == spots.last.x) {
+                            final date = DateTime.fromMillisecondsSinceEpoch(value.toInt());
+                            return Text(DateFormat('HH:mm').format(date)); // formats as "00:00" time
+                          }
+                          return const SizedBox.shrink();
+                        },
+                      ),
                     ),
                   ),
                   borderData: FlBorderData(show: true),
@@ -585,7 +671,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                   lineBarsData: [
                     LineChartBarData(
                       spots: spots,
-                      isCurved: true,
+                      isCurved: false, // Straight lines between points
                       color: Colors.blue,
                       dotData: FlDotData(show: false),
                       belowBarData: BarAreaData(show: false),
@@ -602,7 +688,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the Scheduled Waterings card
   Widget _buildScheduledWateringsCard() {
-    List<Map<String, dynamic>>? schedules = deviceData['schedules'];
+    // Get schedules from deviceData if it exists, otherwise empty list
+    final schedules = deviceData['schedules'] ?? [];
 
     return Card(
       child: Padding(
@@ -615,11 +702,17 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 10),
-            if (schedules == null || schedules.isEmpty)
+            if (schedules.isEmpty)
               Text('No scheduled waterings')
             else
-              ...schedules.map((schedule) => Text(
-                  'Water at ${DateTime.fromMillisecondsSinceEpoch(schedule['time']).toLocal()}')),
+              ...schedules.map((schedule) {
+                final timestamp = schedule['time'] as int;
+                return Text(
+                  'Water at ${DateFormat('MM/dd/yyyy HH:mm').format(
+                    DateTime.fromMillisecondsSinceEpoch(timestamp)
+                  )}'
+                );
+              }),
           ],
         ),
       ),
@@ -653,7 +746,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Method to send water-now request
   Future<void> _waterNow() async {
     final identifier = widget.device['identifier'];
-    final url = Uri.parse('http://example.com/command/$identifier');
+    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
@@ -680,9 +773,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Callback for when a new schedule is added
   void _addSchedule(Map<String, dynamic> schedule) {
     setState(() {
-      if (deviceData.containsKey('schedules')) {
-        deviceData['schedules'] = [];
-      }
+      deviceData.putIfAbsent('schedules', () => []);
       deviceData['schedules']!.add(schedule);
     });
   }
@@ -850,7 +941,7 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
     // Send POST request to schedule watering
     final identifier = widget.deviceIdentifier; // Get device UID
-    final url = Uri.parse('http://example.com/command/$identifier');
+    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
