@@ -115,7 +115,8 @@ class _HomePageState extends State<HomePage> {
       } else {
         deviceData[device['name']] = {
           "plants": [],
-          "data": {}
+          "data": {},
+          "plantNames": {}
         };
       }
     }
@@ -597,13 +598,45 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
   void initState() {
     super.initState();
     deviceData = Map<String, dynamic>.from(widget.initialDeviceData);
+    if (!deviceData.containsKey('plantNames')) {
+      deviceData['plantNames'] = {};
+    }
+
     widget.deviceDataStream.listen((updatedData) {
       if (mounted) {
         setState(() {
-          deviceData = updatedData[widget.device['name']] ?? {"plants": [], "data": {}};
+          var newData = updatedData[widget.device['name']] ?? {"plants": [], "data": {}};
+          // Preserve plant names
+          newData['plantNames'] = deviceData['plantNames'];
+          deviceData = newData;
         });
       }
     });
+  }
+
+  Future<void> _renamePlant(String macAddress) async {
+    String currentName = deviceData['plantNames'][macAddress] ?? 'Plant ${deviceData["plants"].indexOf(macAddress) + 1}';
+
+    String? newName = await showDialog<String>(
+      context: context,
+      builder: (context) => RenameDialog(initialName: currentName),
+    );
+
+    if (newName != null && newName.trim().isNotEmpty) {
+      setState(() {
+        deviceData['plantNames'][macAddress] = newName.trim();
+      });
+
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'deviceData_${widget.device['name']}',
+        json.encode(deviceData)
+      );
+    }
+  }
+
+  String _getPlantName(String macAddress, int index) {
+    return deviceData['plantNames'][macAddress] ?? 'Plant ${index + 1}';
   }
 
   @override
@@ -640,7 +673,17 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
 
                 return Card(
                   child: ListTile(
-                    title: Text('Plant ${index + 1}'),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(_getPlantName(macAddress, index)),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.edit),
+                          onPressed: () => _renamePlant(macAddress),
+                        ),
+                      ],
+                    ),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: keyValueWidgets.isNotEmpty
@@ -654,7 +697,7 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
                           builder: (context) => DeviceDetailPage(
                             device: widget.device,
                             macAddress: macAddress,
-                            initialDeviceData: plantData,
+                            initialDeviceData: deviceData,
                             deviceDataStream: widget.deviceDataStream,
                           ),
                         ),
@@ -664,6 +707,56 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
                 );
               },
             ),
+    );
+  }
+}
+
+class RenameDialog extends StatefulWidget {
+  final String initialName;
+
+  RenameDialog({required this.initialName});
+
+  @override
+  _RenameDialogState createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<RenameDialog> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Rename Plant'),
+      content: TextField(
+        controller: _controller,
+        decoration: InputDecoration(
+          labelText: 'Plant name',
+          hintText: 'Enter new name',
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: Text('Save'),
+        ),
+      ],
     );
   }
 }
@@ -686,18 +779,44 @@ class DeviceDetailPage extends StatefulWidget {
 }
 
 class _DeviceDetailPageState extends State<DeviceDetailPage> {
-  late Map<String, dynamic> plantData;
+  late Map<String, dynamic> deviceData;
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
+
+  String get plantName {
+    String? customName = deviceData['plantNames']?[widget.macAddress];
+    if (customName != null) {
+      return customName;
+    }
+
+    // If no custom name, saffely get the index
+    List<dynamic>? plants = deviceData['plants'] as List<dynamic>?;
+    if (plants != null) {
+      int index = plants.indexOf(widget.macAddress);
+      if (index != -1) {
+        return 'Plant ${index + 1}';
+      }
+    }
+
+    return 'Plant';
+  }
 
   @override
   void initState() {
     super.initState();
-    plantData = widget.initialDeviceData;
+    deviceData = widget.initialDeviceData;
+    // Ensure plantNames exists
+    if (!deviceData.containsKey('plantNames')) {
+      deviceData['plantNames'] = {};
+    }
+
     // Listen to the stream for updates
     widget.deviceDataStream.listen((updatedData) {
       if (mounted) {
         setState(() {
-          plantData = updatedData[widget.device['name']]?["data"]?[widget.macAddress] ?? {};
+          var newData = updatedData[widget.device['name']] ?? {};
+          // Preserve plant names
+          newData['plantNames'] = deviceData['plantNames'];
+          deviceData = newData;
         });
       }
     });
@@ -707,7 +826,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Plant Details'),
+        title: Text(plantName),
         leading: IconButton(
           icon: Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
@@ -746,10 +865,17 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the graph cards
   Widget _buildGraphCard(String key) {
+    // Safely cast the nested maps
+    Map<String, dynamic>? plantData;
+    if (deviceData["data"] is Map) {
+      var data = deviceData["data"] as Map;
+      if (data[widget.macAddress] is Map) {
+        plantData = Map<String, dynamic>.from(data[widget.macAddress]);
+      }
+    }
 
-    // First check if the key doesn't exist or if the data is null
-    if (!plantData.containsKey(key) || plantData[key] == null) {
-      print('3. Early return: key missing or null');
+    // Check for null or missing data
+    if (plantData == null || !plantData.containsKey(key) || plantData[key] == null) {
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -758,12 +884,19 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
-    List<Map<String, dynamic>> dataPoints = plantData[key]!;
+    // Safely cast the data points
+    List<Map<String, dynamic>> dataPoints = [];
+    var rawDataPoints = plantData[key];
+    if (rawDataPoints is List) {
+      dataPoints = rawDataPoints.map((point) {
+        if (point is Map) {
+          return Map<String, dynamic>.from(point);
+        }
+        return <String, dynamic>{};
+      }).toList();
+    }
 
-    // just in case check if the data points list is empty, previously had an error here
-    // Check if the change earlier in the code is enough.
     if (dataPoints.isEmpty) {
-      print('6. Early return: dataPoints is empty');
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -772,21 +905,40 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
-    print('7. Last dataPoint: ${dataPoints.last}');
-    String mostRecentValue = dataPoints.last['value'].toString();
-    print('8. mostRecentValue: $mostRecentValue');
+    // Safely access the last value
+    String mostRecentValue = '';
+    if (dataPoints.last.containsKey('value')) {
+      mostRecentValue = dataPoints.last['value'].toString();
+    }
 
-    print('9. Creating FlSpots...');
-    List<FlSpot> spots = dataPoints.map((entry) {
-      print('10. Processing entry: $entry');
-      return FlSpot(
-        DateTime.parse(entry['timestamp']).millisecondsSinceEpoch.toDouble(),
-        entry['value'].toDouble(),
+    // Create the chart spots
+    List<FlSpot> spots = [];
+    try {
+      spots = dataPoints.map((entry) {
+        return FlSpot(
+          DateTime.parse(entry['timestamp'] as String).millisecondsSinceEpoch.toDouble(),
+          (entry['value'] as num).toDouble(),
+        );
+      }).toList();
+    } catch (e) {
+      print('Error creating spots: $e');
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('Error processing data for $key'),
+        ),
       );
-    }).toList();
-    print('11. FlSpots created: ${spots.length} spots');
+    }
 
-    // Calculate maxY
+    if (spots.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('No valid data points for $key'),
+        ),
+      );
+    }
+
     double maxY = spots.map((spot) => spot.y).reduce((a,b) => a > b ? a : b);
     maxY = getRoundedMaxY(maxY);
 
@@ -819,11 +971,11 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        interval: (spots.length == 1) ? 1 : (spots.last.x - spots.first.x), // Show only first and last labels
+                        interval: (spots.length == 1) ? 1 : (spots.last.x - spots.first.x),
                         getTitlesWidget: (value, meta) {
                           if (value == spots.first.x || value == spots.last.x) {
                             final date = DateTime.fromMillisecondsSinceEpoch(value.toInt());
-                            return Text(DateFormat('HH:mm').format(date)); // formats as "00:00" time
+                            return Text(DateFormat('HH:mm').format(date));
                           }
                           return const SizedBox.shrink();
                         },
@@ -835,8 +987,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                   lineBarsData: [
                     LineChartBarData(
                       spots: spots,
-                      isCurved: false, // Straight lines between points
-                      color: Colors.blue,
+                      isCurved: false,
+                      color: _getColorForKey(key),
                       dotData: FlDotData(show: false),
                       belowBarData: BarAreaData(show: false),
                     ),
@@ -866,7 +1018,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   // Method to build the Scheduled Waterings card
   Widget _buildScheduledWateringsCard() {
-    final schedules = plantData['schedules']?.where((schedule) =>
+    final schedules = deviceData['schedules']?.where((schedule) =>
             schedule['macAddress'] == widget.macAddress)?.toList() ?? [];
 
     return Card(
@@ -885,10 +1037,16 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
             else
               ...schedules.map((schedule) {
                 final timestamp = schedule['time'] as int;
-                return Text(
-                  'Water at ${DateFormat('MM/dd/yyyy HH:mm').format(
-                    DateTime.fromMillisecondsSinceEpoch(timestamp),
-                  )}'
+                return ListTile(
+                  title: Text(
+                    'Water at ${DateFormat('MM/dd/yyyy HH:mm').format(
+                      DateTime.fromMillisecondsSinceEpoch(timestamp),
+                    )}'
+                  ),
+                  trailing: IconButton(
+                    icon: Icon(Icons.delete),
+                    onPressed: () => _confirmRemoveSchedule(schedule),
+                  ),
                 );
               }),
           ],
@@ -897,6 +1055,57 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     );
   }
 
+  void _confirmRemoveSchedule(Map<String, dynamic> schedule) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Remove Schedule'),
+        content: Text('Are you sure you want to remove this watering schedule?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _removeSchedule(schedule);
+            },
+            child: Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _removeSchedule(Map<String, dynamic> schedule) async {
+    // Create a copy of the schedule with the action type
+    Map<String, dynamic> removeRequest = Map.from(schedule);
+    removeRequest['action'] = 'remove';  // Add action type
+
+    final url = Uri.parse('http://10.0.2.2:5000/command/${widget.device['identifier']}');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(removeRequest),
+    );
+
+    if (response.statusCode == 200) {
+      setState(() {
+        deviceData['schedules'].removeWhere((s) => 
+          s['time'] == schedule['time'] && 
+          s['macAddress'] == schedule['macAddress']);
+      });
+    } else {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to remove schedule'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
 
   // Confirm Water Now button press
   void _confirmWaterNow() {
@@ -953,10 +1162,10 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
 
   void _addSchedule(Map<String, dynamic> schedule) {
     setState(() {
-      if (plantData['schedules'] == null) {
-        plantData['schedules'] = [];
+      if (deviceData['schedules'] == null) {
+        deviceData['schedules'] = [];
       }
-      plantData['schedules'].add(schedule);
+      deviceData['schedules'].add(schedule);
     });
   }
 }
@@ -1116,6 +1325,7 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
     Map<String, dynamic> schedule = {
       "type": "water-schedule",
+      "action": "add",
       "macAddress": widget.macAddress,
       "repeating": isRepeating,
       "time": scheduleTime.millisecondsSinceEpoch,
@@ -1138,6 +1348,14 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
     if (response.statusCode == 200) {
       widget.onScheduleAdded(schedule); // Update parent with new schedule
       Navigator.pop(context); // Close the dialog
+    } else {
+      // Error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to add schedule'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 }
