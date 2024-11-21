@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:crypto/crypto.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:intl/intl.dart';
 
 void main() {
   runApp(MyApp());
@@ -30,21 +31,18 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final flutterReactiveBle = FlutterReactiveBle(); // Do I need this?
   List<Map<String, dynamic>> devices = [];
-  Map<String, Map<String, List<Map<String, dynamic>>>> deviceData = {};
+  Map<String, Map<String, dynamic>> deviceData = {};
   Timer? periodicTimer;
 
-  // Keys to display on the home-page card
-  final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
-
   // Stream controller to broadcast device updates
-  final StreamController<Map<String, Map<String, List<Map<String, dynamic>>>>>
-      deviceDataStreamController = StreamController<
-          Map<String, Map<String, List<Map<String, dynamic>>>>>.broadcast();
+  final StreamController<Map<String, Map<String, dynamic>>> deviceDataStreamController = StreamController<Map<String, Map<String, dynamic>>>.broadcast();
 
   @override
   void initState() {
     super.initState();
-    _checkPermissions(); // Check permissions on startup
+    _loadDevices().then((_) {
+      _checkPermissions(); // Check permissions on startup
+    });
   }
 
   Future<void> _checkPermissions() async {
@@ -97,6 +95,21 @@ class _HomePageState extends State<HomePage> {
           .cast<Map<String, dynamic>>();
     }
 
+    // Load device data
+    for (var device in devices) {
+      String? savedData = prefs.getString('deviceData_${device['name']}');
+      if (savedData != null) {
+        Map<String, dynamic> decodedData = json.decode(savedData);
+        deviceData[device['name']] = decodedData;
+      } else {
+        deviceData[device['name']] = {
+          "plants": [],
+          "data": {},
+          "plantNames": {}
+        };
+      }
+    }
+
     if (devices.isNotEmpty) {
       _startPeriodicRequests();
     }
@@ -104,10 +117,52 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  Future<void> _saveDevices() async {
+  Future<void> _saveDeviceData() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    // Save devices list
     List<String> savedDevices = devices.map((d) => json.encode(d)).toList();
     prefs.setStringList('devices', savedDevices);
+
+    // Save device data
+    for (var entry in deviceData.entries) {
+      String deviceName = entry.key;
+      Map<String, dynamic> data = entry.value;
+
+      await prefs.setString('deviceData_${deviceName}', json.encode(data));
+    }
+  }
+
+  void _cleanOldData(String deviceName) {
+    DateTime now = DateTime.now();
+
+    if (deviceData[deviceName]?["data"] != null) {
+      // Safely cast the data map
+      Map<String, dynamic> plantsData = 
+        Map<String, dynamic>.from(deviceData[deviceName]!["data"] as Map);
+
+      plantsData.forEach((macAddress, plantData) {
+        // Cast each plant's data map
+        Map<String, dynamic> typedPlantData = 
+          Map<String, dynamic>.from(plantData as Map);
+
+        typedPlantData.forEach((key, valuesList) {
+          if (valuesList is List) {
+            List<Map<String, dynamic>> typedList = 
+              (valuesList as List).map((entry) {
+                return Map<String, dynamic>.from(entry as Map);
+              }).toList();
+
+            typedList = typedList.where((entry) {
+              DateTime entryTime = DateTime.parse(entry['timestamp'].toString());
+              return now.difference(entryTime).inHours < 24;
+            }).toList();
+
+            deviceData[deviceName]!["data"][macAddress][key] = typedList;
+          }
+        });
+      });
+    }
   }
 
   void _startPeriodicRequests() {
@@ -126,42 +181,108 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _sendHttpRequest(String deviceName, String identifier) async {
-    final url = Uri.parse('http://example.com/data/$identifier');
-    final response = await http.get(url);
-    if (response.statusCode == 200) {
-      DateTime now = DateTime.now();
+    try {
+      final url = Uri.parse('http://10.0.2.2:5000/data/$identifier');
+      final response = await http.get(url);
 
-      // Decode the response body as key-value pairs
-      Map<String, dynamic> responseData = json.decode(response.body);
+      if (response.statusCode == 200) {
+        DateTime now = DateTime.now();
+      
+        // Add debug prints to see what we're receiving
+        print('Raw response: ${response.body}');
+      
+        // Decode JSON and cast step by step
+        var rawData = json.decode(response.body);
+        print('Decoded data type: ${rawData.runtimeType}');
+      
+        // First create a new map with String keys
+        Map<String, dynamic> responseData = {};
+      
+        // Safely copy data
+        if (rawData is Map) {
+          responseData['plants'] = rawData['plants'];
+          responseData['data'] = {};
+        
+          if (rawData['data'] is Map) {
+            (rawData['data'] as Map).forEach((key, value) {
+              if (key is String) {
+                responseData['data'][key] = value;
+              }
+            });
+          }
+        }
+      
+        setState(() {
+          deviceData.putIfAbsent(deviceName, () => {
+            "plants": [],
+            "data": {}
+          });
 
-      // Update the deviceData map with new data
-      setState(() {
-        deviceData.putIfAbsent(deviceName, () => {});
-
-        responseData.forEach((key, value) {
-          deviceData[deviceName]!.putIfAbsent(key, () => []);
-          // Add new response to the list
-          deviceData[deviceName]![key]!
-              .add({'value': value, 'timestamp': now.toIso8601String()});
-
-          // Remove responses older than 24 hours
-          deviceData[deviceName]![key] =
-              deviceData[deviceName]![key]!.where((entry) {
-            DateTime entryTime = DateTime.parse(entry['timestamp']);
-            return now.difference(entryTime).inHours < 24;
-          }).toList();
+          // Convert plants array
+          if (responseData['plants'] is List) {
+            deviceData[deviceName]!["plants"] = 
+                (responseData['plants'] as List).map((e) => e.toString()).toList();
+          }
+        
+          // Handle plant data
+          if (responseData['data'] is Map) {
+            (responseData['data'] as Map).forEach((macAddress, plantData) {
+              String mac = macAddress.toString();
+              if (!deviceData[deviceName]!["data"].containsKey(mac)) {
+                deviceData[deviceName]!["data"][mac] = {};
+              }
+            
+              if (plantData is Map) {
+                plantData.forEach((key, value) {
+                  String dataKey = key.toString();
+                  deviceData[deviceName]!["data"][mac].putIfAbsent(dataKey, () => []);
+                  deviceData[deviceName]!["data"][mac][dataKey].add({
+                    'value': value,
+                    'timestamp': now.toIso8601String()
+                  });
+                });
+              }
+            });
+          }
         });
-      });
 
-      // Send updated data through the stream
-      deviceDataStreamController.add(deviceData);
+        deviceDataStreamController.add(deviceData);
+        _cleanOldData(deviceName);
+        _saveDeviceData();
+      } else {
+        print('Error: HTTP ${response.statusCode}');
+        print('Response body: ${response.body}');
+      }
+    } catch (e, stackTrace) {
+      print('Error fetching device data: $e');
+      print('Stack trace: $stackTrace');
+      // Print the current state of deviceData for debugging
+      print('Current deviceData: $deviceData');
+    }
+  }
+
+  void _handlePlantDisconnection(String deviceName, String macAddress) {
+    if (deviceData[deviceName]?["data"]?[macAddress] != null) {
+      setState(() {
+        // Remove plant data
+        deviceData[deviceName]!["data"].remove(macAddress);
+        // Remove from plants list
+        List<String> plants = List<String>.from(deviceData[deviceName]!["plants"]);
+        plants.remove(macAddress);
+        deviceData[deviceName]!["plants"] = plants;
+      });
+      _saveDeviceData();
     }
   }
 
   void _addDevice(Map<String, dynamic> newDevice) {
     setState(() {
       devices.insert(0, newDevice);
-      _saveDevices();
+      deviceData[newDevice['name']] = {
+        "plants": [],
+        "data": {}
+      };
+      _saveDeviceData();
     });
 
     if (devices.isNotEmpty) {
@@ -172,7 +293,8 @@ class _HomePageState extends State<HomePage> {
   void _removeDevice(Map<String, dynamic> device) {
     setState(() {
       devices.remove(device);
-      _saveDevices();
+      deviceData.remove(device['name']);
+      _saveDeviceData();
 
       if (devices.isEmpty) {
         _stopPeriodicRequests();
@@ -204,43 +326,31 @@ class _HomePageState extends State<HomePage> {
           final device = devices[index];
           final deviceName = device['name'];
 
-          // Get the filtered latest values for the keys we want to show
-          List<Widget> keyValueWidgets = [];
-          if (deviceData.containsKey(deviceName)) {
-            deviceData[deviceName]!.forEach((key, values) {
-              if (keysToShow.contains(key) && values.isNotEmpty) {
-                String latestValue = values.last['value'].toString();
-                keyValueWidgets.add(Text('$key: $latestValue'));
-              }
-            });
+          int plantCount = 0;
+          if (deviceData.containsKey(deviceName) && 
+              deviceData[deviceName]!.containsKey("plants")) {
+            plantCount = (deviceData[deviceName]!["plants"] as List).length;
           }
 
           return Card(
             child: ListTile(
               title: Text(deviceName),
-              // Display filtered key-value pairs as the subtitle
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: keyValueWidgets.isNotEmpty
-                    ? keyValueWidgets
-                    : [Text('No data yet')],
-              ),
+              subtitle: Text('Connected Plants: $plantCount'),
               onTap: () {
                 Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => DeviceDetailPage(
-                              device: device,
-                              initialDeviceData: deviceData[deviceName] ?? {},
-                              deviceDataStream:
-                                  deviceDataStreamController.stream,
-                            )));
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => DevicePlantsPage(
+                      device: device,
+                      initialDeviceData: deviceData[deviceName] ?? {"plants": [], "data": {}},
+                      deviceDataStream: deviceDataStreamController.stream,
+                    ),
+                  ),
+                );
               },
               trailing: IconButton(
                 icon: Icon(Icons.delete),
-                onPressed: () {
-                  _removeDevice(device);
-                },
+                onPressed: () => _removeDevice(device),
               ),
             ),
           );
@@ -440,34 +550,247 @@ class AddDeviceDialog {
   }
 }
 
+class DevicePlantsPage extends StatefulWidget {
+  final Map<String, dynamic> device;
+  final Map<String, dynamic> initialDeviceData;
+  final Stream<Map<String, Map<String, dynamic>>> deviceDataStream;
+
+  DevicePlantsPage({
+    required this.device,
+    required this.initialDeviceData,
+    required this.deviceDataStream,
+  });
+
+  @override
+  _DevicePlantsPageState createState() => _DevicePlantsPageState();
+}
+
+class _DevicePlantsPageState extends State<DevicePlantsPage> {
+  late Map<String, dynamic> deviceData;
+
+  @override
+  void initState() {
+    super.initState();
+    deviceData = Map<String, dynamic>.from(widget.initialDeviceData);
+    if (!deviceData.containsKey('plantNames')) {
+      deviceData['plantNames'] = {};
+    }
+
+    widget.deviceDataStream.listen((updatedData) {
+      if (mounted) {
+        setState(() {
+          var newData = updatedData[widget.device['name']] ?? {"plants": [], "data": {}};
+          // Preserve plant names
+          newData['plantNames'] = deviceData['plantNames'];
+          deviceData = newData;
+        });
+      }
+    });
+  }
+
+  Future<void> _renamePlant(String macAddress) async {
+    String currentName = deviceData['plantNames'][macAddress] ?? 'Plant ${deviceData["plants"].indexOf(macAddress) + 1}';
+
+    String? newName = await showDialog<String>(
+      context: context,
+      builder: (context) => RenameDialog(initialName: currentName),
+    );
+
+    if (newName != null && newName.trim().isNotEmpty) {
+      setState(() {
+        deviceData['plantNames'][macAddress] = newName.trim();
+      });
+
+      SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'deviceData_${widget.device['name']}',
+        json.encode(deviceData)
+      );
+    }
+  }
+
+  String _getPlantName(String macAddress, int index) {
+    return deviceData['plantNames'][macAddress] ?? 'Plant ${index + 1}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    List<String> plants = List<String>.from(deviceData["plants"] ?? []);
+    
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${widget.device['name']} Plants'),
+      ),
+      body: plants.isEmpty
+          ? Center(
+              child: Text('No plants connected to this device'),
+            )
+          : ListView.builder(
+              itemCount: plants.length,
+              itemBuilder: (context, index) {
+                String macAddress = plants[index];
+                Map<String, dynamic> plantData = 
+                    Map<String, dynamic>.from(deviceData["data"][macAddress] ?? {});
+                
+                List<Widget> keyValueWidgets = [];
+                plantData.forEach((key, values) {
+                  if (values is List && values.isNotEmpty && 
+                      ['temperature', 'moisture', 'uv'].contains(key)) {
+                    // Safely access the last value
+                    var lastEntry = values.last;
+                    if (lastEntry is Map) {
+                      String latestValue = lastEntry['value'].toString();
+                      keyValueWidgets.add(Text('$key: $latestValue'));
+                    }
+                  }
+                });
+
+                return Card(
+                  child: ListTile(
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(_getPlantName(macAddress, index)),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.edit),
+                          onPressed: () => _renamePlant(macAddress),
+                        ),
+                      ],
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: keyValueWidgets.isNotEmpty
+                          ? keyValueWidgets
+                          : [Text('No data yet')],
+                    ),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => DeviceDetailPage(
+                            device: widget.device,
+                            macAddress: macAddress,
+                            initialDeviceData: deviceData,
+                            deviceDataStream: widget.deviceDataStream,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class RenameDialog extends StatefulWidget {
+  final String initialName;
+
+  RenameDialog({required this.initialName});
+
+  @override
+  _RenameDialogState createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<RenameDialog> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Rename Plant'),
+      content: TextField(
+        controller: _controller,
+        decoration: InputDecoration(
+          labelText: 'Plant name',
+          hintText: 'Enter new name',
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
 class DeviceDetailPage extends StatefulWidget {
   final Map<String, dynamic> device;
-  final Map<String, List<Map<String, dynamic>>> initialDeviceData;
-  final Stream<Map<String, Map<String, List<Map<String, dynamic>>>>>
-      deviceDataStream;
+  final String macAddress;
+  final Map<String, dynamic> initialDeviceData;
+  final Stream<Map<String, Map<String, dynamic>>> deviceDataStream;
 
-  DeviceDetailPage(
-      {required this.device,
+  DeviceDetailPage({
+      required this.device,
+      required this.macAddress,
       required this.initialDeviceData,
-      required this.deviceDataStream});
+      required this.deviceDataStream,
+  });
 
   @override
   _DeviceDetailPageState createState() => _DeviceDetailPageState();
 }
 
 class _DeviceDetailPageState extends State<DeviceDetailPage> {
-  late Map<String, List<Map<String, dynamic>>> deviceData;
+  late Map<String, dynamic> deviceData;
   final List<String> keysToShow = ['temperature', 'moisture', 'uv'];
+
+  String get plantName {
+    String? customName = deviceData['plantNames']?[widget.macAddress];
+    if (customName != null) {
+      return customName;
+    }
+
+    // If no custom name, saffely get the index
+    List<dynamic>? plants = deviceData['plants'] as List<dynamic>?;
+    if (plants != null) {
+      int index = plants.indexOf(widget.macAddress);
+      if (index != -1) {
+        return 'Plant ${index + 1}';
+      }
+    }
+
+    return 'Plant';
+  }
 
   @override
   void initState() {
     super.initState();
     deviceData = widget.initialDeviceData;
+    // Ensure plantNames exists
+    if (!deviceData.containsKey('plantNames')) {
+      deviceData['plantNames'] = {};
+    }
+
     // Listen to the stream for updates
     widget.deviceDataStream.listen((updatedData) {
       if (mounted) {
         setState(() {
-          deviceData = updatedData[widget.device['name']] ?? {};
+          var newData = updatedData[widget.device['name']] ?? {};
+          // Preserve plant names
+          newData['plantNames'] = deviceData['plantNames'];
+          deviceData = newData;
         });
       }
     });
@@ -477,7 +800,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.device['name']),
+        title: Text(plantName),
         leading: IconButton(
           icon: Icon(Icons.arrow_back),
           onPressed: () => Navigator.pop(context),
@@ -509,16 +832,24 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       ),
     );
   }
+  
+  double getRoundedMaxY(double actualMaxY) {
+    return (actualMaxY / 5).ceil() * 5;
+  }
 
   // Method to build the graph cards
   Widget _buildGraphCard(String key) {
-    print('=== Debug: Building graph card for key: $key ===');
-    print('1. Current deviceData: $deviceData');
-    print('2. Keys in deviceData: ${deviceData.keys.toList()}');
+    // Safely cast the nested maps
+    Map<String, dynamic>? plantData;
+    if (deviceData["data"] is Map) {
+      var data = deviceData["data"] as Map;
+      if (data[widget.macAddress] is Map) {
+        plantData = Map<String, dynamic>.from(data[widget.macAddress]);
+      }
+    }
 
-    // First check if the key doesn't exist or if the data is null
-    if (deviceData.containsKey(key) || deviceData[key] == null) {
-      print('3. Early return: key missing or null');
+    // Check for null or missing data
+    if (plantData == null || !plantData.containsKey(key) || plantData[key] == null) {
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -527,14 +858,19 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
-    print('4. Retrieved data for key: ${deviceData[key]}');
-    List<Map<String, dynamic>> dataPoints = deviceData[key]!;
-    print('5. DataPoints length: ${dataPoints.length}');
+    // Safely cast the data points
+    List<Map<String, dynamic>> dataPoints = [];
+    var rawDataPoints = plantData[key];
+    if (rawDataPoints is List) {
+      dataPoints = rawDataPoints.map((point) {
+        if (point is Map) {
+          return Map<String, dynamic>.from(point);
+        }
+        return <String, dynamic>{};
+      }).toList();
+    }
 
-    // just in case check if the data points list is empty, previously had an error here
-    // Check if the change earlier in the code is enough.
     if (dataPoints.isEmpty) {
-      print('6. Early return: dataPoints is empty');
       return Card(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
@@ -543,23 +879,46 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       );
     }
 
-    print('7. Last dataPoint: ${dataPoints.last}');
-    String mostRecentValue = dataPoints.last['value'].toString();
-    print('8. mostRecentValue: $mostRecentValue');
+    // Safely access the last value
+    String mostRecentValue = '';
+    if (dataPoints.last.containsKey('value')) {
+      mostRecentValue = dataPoints.last['value'].toString();
+    }
 
-    print('9. Creating FlSpots...');
-    List<FlSpot> spots = dataPoints.map((entry) {
-      print('10. Processing entry: $entry');
-      return FlSpot(
-        DateTime.parse(entry['timestamp']).millisecondsSinceEpoch.toDouble(),
-        entry['value'].toDouble(),
+    // Create the chart spots
+    List<FlSpot> spots = [];
+    try {
+      spots = dataPoints.map((entry) {
+        return FlSpot(
+          DateTime.parse(entry['timestamp'] as String).millisecondsSinceEpoch.toDouble(),
+          (entry['value'] as num).toDouble(),
+        );
+      }).toList();
+    } catch (e) {
+      print('Error creating spots: $e');
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('Error processing data for $key'),
+        ),
       );
-    }).toList();
-    print('11. FlSpots created: ${spots.length} spots');
+    }
+
+    if (spots.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Text('No valid data points for $key'),
+        ),
+      );
+    }
+
+    double maxY = spots.map((spot) => spot.y).reduce((a,b) => a > b ? a : b);
+    maxY = getRoundedMaxY(maxY);
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(8.0),
+        padding: const EdgeInsets.only(left: 14.0, right: 0.0, top: 8.0, bottom: 8.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -572,12 +931,29 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
               height: 200,
               child: LineChart(
                 LineChartData(
+                  minX: spots.first.x,
+                  maxX: spots.last.x,
+                  minY: 0,
+                  maxY: maxY,
                   titlesData: FlTitlesData(
+                    topTitles: AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
                     leftTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true),
+                      sideTitles: SideTitles(showTitles: false),
                     ),
                     bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(showTitles: true),
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        interval: (spots.length == 1) ? 1 : (spots.last.x - spots.first.x),
+                        getTitlesWidget: (value, meta) {
+                          if (value == spots.first.x || value == spots.last.x) {
+                            final date = DateTime.fromMillisecondsSinceEpoch(value.toInt());
+                            return Text(DateFormat('HH:mm').format(date));
+                          }
+                          return const SizedBox.shrink();
+                        },
+                      ),
                     ),
                   ),
                   borderData: FlBorderData(show: true),
@@ -585,8 +961,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
                   lineBarsData: [
                     LineChartBarData(
                       spots: spots,
-                      isCurved: true,
-                      color: Colors.blue,
+                      isCurved: false,
+                      color: _getColorForKey(key),
                       dotData: FlDotData(show: false),
                       belowBarData: BarAreaData(show: false),
                     ),
@@ -600,9 +976,24 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     );
   }
 
+  // Helper method to get different colors for different metrics
+  Color _getColorForKey(String key) {
+    switch (key) {
+      case 'temperature':
+        return Colors.red;
+      case 'moisture':
+        return Colors.blue;
+      case 'uv':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
+  }
+
   // Method to build the Scheduled Waterings card
   Widget _buildScheduledWateringsCard() {
-    List<Map<String, dynamic>>? schedules = deviceData['schedules'];
+    final schedules = deviceData['schedules']?.where((schedule) =>
+            schedule['macAddress'] == widget.macAddress)?.toList() ?? [];
 
     return Card(
       child: Padding(
@@ -615,15 +1006,79 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 10),
-            if (schedules == null || schedules.isEmpty)
+            if (schedules.isEmpty)
               Text('No scheduled waterings')
             else
-              ...schedules.map((schedule) => Text(
-                  'Water at ${DateTime.fromMillisecondsSinceEpoch(schedule['time']).toLocal()}')),
+              ...schedules.map((schedule) {
+                final timestamp = schedule['time'] as int;
+                return ListTile(
+                  title: Text(
+                    'Water at ${DateFormat('MM/dd/yyyy HH:mm').format(
+                      DateTime.fromMillisecondsSinceEpoch(timestamp),
+                    )}'
+                  ),
+                  trailing: IconButton(
+                    icon: Icon(Icons.delete),
+                    onPressed: () => _confirmRemoveSchedule(schedule),
+                  ),
+                );
+              }),
           ],
         ),
       ),
     );
+  }
+
+  void _confirmRemoveSchedule(Map<String, dynamic> schedule) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Remove Schedule'),
+        content: Text('Are you sure you want to remove this watering schedule?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _removeSchedule(schedule);
+            },
+            child: Text('Remove'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _removeSchedule(Map<String, dynamic> schedule) async {
+    // Create a copy of the schedule with the action type
+    Map<String, dynamic> removeRequest = Map.from(schedule);
+    removeRequest['action'] = 'remove';  // Add action type
+
+    final url = Uri.parse('http://10.0.2.2:5000/command/${widget.device['identifier']}');
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(removeRequest),
+    );
+
+    if (response.statusCode == 200) {
+      setState(() {
+        deviceData['schedules'].removeWhere((s) => 
+          s['time'] == schedule['time'] && 
+          s['macAddress'] == schedule['macAddress']);
+      });
+    } else {
+      // Show error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to remove schedule'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   // Confirm Water Now button press
@@ -640,8 +1095,8 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context); // Close the dialog
-              _waterNow(); // Call water now method
+              Navigator.pop(context);
+              _waterNow();
             },
             child: Text('Yes'),
           ),
@@ -653,12 +1108,13 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Method to send water-now request
   Future<void> _waterNow() async {
     final identifier = widget.device['identifier'];
-    final url = Uri.parse('http://example.com/command/$identifier');
+    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
       body: json.encode({
         "type": "water-now",
+        "macAddress": widget.macAddress,  // Add MAC address to request
       }),
     );
     if (response.statusCode == 200) {
@@ -672,28 +1128,32 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
       context: context,
       builder: (context) => ScheduleWateringDialog(
         deviceIdentifier: widget.device['identifier'],
+        macAddress: widget.macAddress,  // Pass MAC address to dialog
         onScheduleAdded: _addSchedule,
       ),
     );
   }
 
-  // Callback for when a new schedule is added
   void _addSchedule(Map<String, dynamic> schedule) {
     setState(() {
-      if (deviceData.containsKey('schedules')) {
+      if (deviceData['schedules'] == null) {
         deviceData['schedules'] = [];
       }
-      deviceData['schedules']!.add(schedule);
+      deviceData['schedules'].add(schedule);
     });
   }
 }
 
 class ScheduleWateringDialog extends StatefulWidget {
   final String deviceIdentifier;
+  final String macAddress;  // Add MAC address parameter
   final Function(Map<String, dynamic>) onScheduleAdded;
 
-  ScheduleWateringDialog(
-      {required this.deviceIdentifier, required this.onScheduleAdded});
+  ScheduleWateringDialog({
+    required this.deviceIdentifier,
+    required this.macAddress,
+    required this.onScheduleAdded,
+  });
 
   @override
   _ScheduleWateringDialogState createState() => _ScheduleWateringDialogState();
@@ -839,6 +1299,8 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
     Map<String, dynamic> schedule = {
       "type": "water-schedule",
+      "action": "add",
+      "macAddress": widget.macAddress,
       "repeating": isRepeating,
       "time": scheduleTime.millisecondsSinceEpoch,
     };
@@ -850,7 +1312,7 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
     // Send POST request to schedule watering
     final identifier = widget.deviceIdentifier; // Get device UID
-    final url = Uri.parse('http://example.com/command/$identifier');
+    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
@@ -860,6 +1322,14 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
     if (response.statusCode == 200) {
       widget.onScheduleAdded(schedule); // Update parent with new schedule
       Navigator.pop(context); // Close the dialog
+    } else {
+      // Error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to add schedule'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 }
