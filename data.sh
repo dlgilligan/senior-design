@@ -13,6 +13,9 @@ MAX_MOISTURE=80
 MIN_UV=1
 MAX_UV=5
 
+# Initialize water level
+WATER_LEVEL=100
+
 # Function to process commands
 process_commands() {
     response=$1
@@ -44,7 +47,7 @@ EOF
 )
     done
     
-    # Create the complete JSON body
+    # Create the complete JSON body with water level
     json_body=$(cat <<EOF
 {
     "plants": $(printf '%s\n' "${MAC_ADDRESSES[@]}" | jq -R . | jq -s .),
@@ -55,7 +58,8 @@ EOF
                 echo ","
             fi
         done)
-    }
+    },
+    "water": $WATER_LEVEL
 }
 EOF
 )
@@ -81,6 +85,12 @@ EOF
     echo "$response_body" | jq '.'
     echo "HTTP Status: $http_code"
     echo "-------------------"
+    
+    # Decrease water level and reset if it reaches 0
+    WATER_LEVEL=$((WATER_LEVEL - 1))
+    if [ $WATER_LEVEL -lt 0 ]; then
+        WATER_LEVEL=100
+    fi
     
     # Sleep for 10 seconds
     sleep 10

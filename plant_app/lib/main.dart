@@ -193,86 +193,79 @@ class _HomePageState extends State<HomePage> {
     periodicTimer = null;
   }
 
-  Future<void> _sendHttpRequest(String deviceName, String identifier) async {
-  try {
-    final url = Uri.parse('http://10.0.2.2:5000/data/$identifier');
-    final response = await http.get(url);
 
-    if (response.statusCode == 200) {
-      DateTime now = DateTime.now();
-      
-      // Add debug prints to see what we're receiving
-      print('Raw response: ${response.body}');
-      
-      // Decode JSON and cast step by step
-      var rawData = json.decode(response.body);
-      print('Decoded data type: ${rawData.runtimeType}');
-      
-      // First create a new map with String keys
-      Map<String, dynamic> responseData = {};
-      
-      // Safely copy data
-      if (rawData is Map) {
-        responseData['plants'] = rawData['plants'];
-        responseData['data'] = {};
+  Future<void> _sendHttpRequest(String deviceName, String identifier) async {
+    try {
+      final url = Uri.parse('http://10.0.2.2:5000/data/$identifier');
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        DateTime now = DateTime.now();
         
-        if (rawData['data'] is Map) {
-          (rawData['data'] as Map).forEach((key, value) {
-            if (key is String) {
-              responseData['data'][key] = value;
-            }
-          });
+        var rawData = json.decode(response.body);
+        Map<String, dynamic> responseData = {};
+        
+        if (rawData is Map) {
+          responseData['plants'] = rawData['plants'];
+          responseData['data'] = {};
+          responseData['water'] = rawData['water']; // Add water level
+          
+          if (rawData['data'] is Map) {
+            (rawData['data'] as Map).forEach((key, value) {
+              if (key is String) {
+                responseData['data'][key] = value;
+              }
+            });
+          }
         }
-      }
-      
-      setState(() {
-        deviceData.putIfAbsent(deviceName, () => {
-          "plants": [],
-          "data": {}
+        
+        setState(() {
+          deviceData.putIfAbsent(deviceName, () => {
+            "plants": [],
+            "data": {},
+            "water": 0, // Initialize water level
+          });
+
+          // Update water level
+          deviceData[deviceName]!["water"] = responseData['water'] ?? 0;
+
+          // Rest of the existing code remains the same
+          if (responseData['plants'] is List) {
+            deviceData[deviceName]!["plants"] = 
+                (responseData['plants'] as List).map((e) => e.toString()).toList();
+          }
+          
+          if (responseData['data'] is Map) {
+            (responseData['data'] as Map).forEach((macAddress, plantData) {
+              String mac = macAddress.toString();
+              if (!deviceData[deviceName]!["data"].containsKey(mac)) {
+                deviceData[deviceName]!["data"][mac] = {};
+              }
+              
+              if (plantData is Map) {
+                plantData.forEach((key, value) {
+                  String dataKey = key.toString();
+                  deviceData[deviceName]!["data"][mac].putIfAbsent(dataKey, () => []);
+                  deviceData[deviceName]!["data"][mac][dataKey].add({
+                    'value': value,
+                    'timestamp': now.toIso8601String()
+                  });
+                });
+              }
+            });
+          }
         });
 
-        // Convert plants array
-        if (responseData['plants'] is List) {
-          deviceData[deviceName]!["plants"] = 
-              (responseData['plants'] as List).map((e) => e.toString()).toList();
-        }
-        
-        // Handle plant data
-        if (responseData['data'] is Map) {
-          (responseData['data'] as Map).forEach((macAddress, plantData) {
-            String mac = macAddress.toString();
-            if (!deviceData[deviceName]!["data"].containsKey(mac)) {
-              deviceData[deviceName]!["data"][mac] = {};
-            }
-            
-            if (plantData is Map) {
-              plantData.forEach((key, value) {
-                String dataKey = key.toString();
-                deviceData[deviceName]!["data"][mac].putIfAbsent(dataKey, () => []);
-                deviceData[deviceName]!["data"][mac][dataKey].add({
-                  'value': value,
-                  'timestamp': now.toIso8601String()
-                });
-              });
-            }
-          });
-        }
-      });
-
-      deviceDataStreamController.add(deviceData);
-      _cleanOldData(deviceName);
-      _saveDeviceData();
-    } else {
-      print('Error: HTTP ${response.statusCode}');
-      print('Response body: ${response.body}');
+        deviceDataStreamController.add(deviceData);
+        _cleanOldData(deviceName);
+        _saveDeviceData();
+      }
+    } catch (e, stackTrace) {
+      print('Error fetching device data: $e');
+      print('Stack trace: $stackTrace');
     }
-  } catch (e, stackTrace) {
-    print('Error fetching device data: $e');
-    print('Stack trace: $stackTrace');
-    // Print the current state of deviceData for debugging
-    print('Current deviceData: $deviceData');
   }
-}
+
 
   void _handlePlantDisconnection(String deviceName, String macAddress) {
     if (deviceData[deviceName]?["data"]?[macAddress] != null) {
@@ -340,22 +333,48 @@ class _HomePageState extends State<HomePage> {
           final deviceName = device['name'];
 
           int plantCount = 0;
-          if (deviceData.containsKey(deviceName) && 
-              deviceData[deviceName]!.containsKey("plants")) {
-            plantCount = (deviceData[deviceName]!["plants"] as List).length;
+          int waterLevel = 0;
+          if (deviceData.containsKey(deviceName)) {
+            if (deviceData[deviceName]!.containsKey("plants")) {
+              plantCount = (deviceData[deviceName]!["plants"] as List).length;
+            }
+            if (deviceData[deviceName]!.containsKey("water")) {
+              waterLevel = (deviceData[deviceName]!["water"] as num).toInt();
+            }
           }
 
           return Card(
             child: ListTile(
               title: Text(deviceName),
-              subtitle: Text('Connected Plants: $plantCount'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Connected Plants: $plantCount'),
+                  SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.water_drop,
+                        size: 16,
+                        color: Colors.blue,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'Water Level: $waterLevel%',
+                        style: TextStyle(color: Colors.blue),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
               onTap: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (context) => DevicePlantsPage(
                       device: device,
-                      initialDeviceData: deviceData[deviceName] ?? {"plants": [], "data": {}},
+                      initialDeviceData: deviceData[deviceName] ?? 
+                          {"plants": [], "data": {}, "water": 0},
                       deviceDataStream: deviceDataStreamController.stream,
                     ),
                   ),
@@ -593,6 +612,7 @@ class DevicePlantsPage extends StatefulWidget {
 
 class _DevicePlantsPageState extends State<DevicePlantsPage> {
   late Map<String, dynamic> deviceData;
+  final List<String> keysToShow = ['temperature', 'moisture', 'uv']; // Added keysToShow list
 
   @override
   void initState() {
@@ -639,6 +659,34 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
     return deviceData['plantNames'][macAddress] ?? 'Plant ${index + 1}';
   }
 
+  // Helper method to build sensor data widgets
+  List<Widget> _buildSensorDataWidgets(Map<String, dynamic> plantData) {
+    List<Widget> widgets = [];
+    
+    for (String key in keysToShow) {
+      if (plantData.containsKey(key) && 
+          plantData[key] is List && 
+          plantData[key].isNotEmpty) {
+        
+        var lastEntry = plantData[key].last;
+        if (lastEntry is Map && lastEntry.containsKey('value')) {
+          String value = lastEntry['value'].toString();
+          widgets.add(
+            Padding(
+              padding: EdgeInsets.only(top: 4.0),
+              child: Text(
+                '$key: $value',
+                style: TextStyle(fontSize: 14.0),
+              ),
+            )
+          );
+        }
+      }
+    }
+    
+    return widgets.isEmpty ? [Text('No data yet')] : widgets;
+  }
+
   @override
   Widget build(BuildContext context) {
     List<String> plants = List<String>.from(deviceData["plants"] ?? []);
@@ -658,19 +706,6 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
                 Map<String, dynamic> plantData = 
                     Map<String, dynamic>.from(deviceData["data"][macAddress] ?? {});
                 
-                List<Widget> keyValueWidgets = [];
-                plantData.forEach((key, values) {
-                  if (values is List && values.isNotEmpty && 
-                      ['temperature', 'moisture', 'uv'].contains(key)) {
-                    // Safely access the last value
-                    var lastEntry = values.last;
-                    if (lastEntry is Map) {
-                      String latestValue = lastEntry['value'].toString();
-                      keyValueWidgets.add(Text('$key: $latestValue'));
-                    }
-                  }
-                });
-
                 return Card(
                   child: ListTile(
                     title: Row(
@@ -686,9 +721,7 @@ class _DevicePlantsPageState extends State<DevicePlantsPage> {
                     ),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: keyValueWidgets.isNotEmpty
-                          ? keyValueWidgets
-                          : [Text('No data yet')],
+                      children: _buildSensorDataWidgets(plantData),
                     ),
                     onTap: () {
                       Navigator.push(
