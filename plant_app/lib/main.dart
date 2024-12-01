@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
@@ -30,7 +29,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final flutterReactiveBle = FlutterReactiveBle(); // Do I need this?
   List<Map<String, dynamic>> devices = [];
   Map<String, Map<String, dynamic>> deviceData = {};
   Timer? periodicTimer;
