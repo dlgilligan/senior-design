@@ -166,7 +166,7 @@ class _HomePageState extends State<HomePage> {
 
   void _startPeriodicRequests() {
     if (periodicTimer == null && devices.isNotEmpty) {
-      periodicTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      periodicTimer = Timer.periodic(Duration(seconds: 15), (timer) {
         for (var device in devices) {
           _sendHttpRequest(device['name'], device['identifier']);
         }
@@ -181,7 +181,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _sendHttpRequest(String deviceName, String identifier) async {
     try {
-      final url = Uri.parse('http://10.0.2.2:5000/data/$identifier');
+      final url = Uri.parse('http://192.168.1.56:5000/data/$identifier');
       final response = await http.get(url);
 
       if (response.statusCode == 200) {

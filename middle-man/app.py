@@ -31,6 +31,8 @@ def put_data(identifier):
 
     # Update the data for the identifier
     data_store[identifier]['data'] = data
+    app.logger.info(data)
+    app.logger.info('Data shouldve printed')
 
     # Check if there are any commands stored
     if len(data_store[identifier]['commands']) > 0:

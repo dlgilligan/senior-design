@@ -327,7 +327,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
     Map<String, dynamic> removeRequest = Map.from(schedule);
     removeRequest['action'] = 'remove';  // Add action type
 
-    final url = Uri.parse('http://10.0.2.2:5000/command/${widget.device['identifier']}');
+    final url = Uri.parse('http://192.168.1.56:5000/command/${widget.device['identifier']}');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
@@ -378,7 +378,7 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
   // Method to send water-now request
   Future<void> _waterNow() async {
     final identifier = widget.device['identifier'];
-    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
+    final url = Uri.parse('http://192.168.1.56:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
@@ -582,7 +582,7 @@ class _ScheduleWateringDialogState extends State<ScheduleWateringDialog> {
 
     // Send POST request to schedule watering
     final identifier = widget.deviceIdentifier; // Get device UID
-    final url = Uri.parse('http://10.0.2.2:5000/command/$identifier');
+    final url = Uri.parse('http://192.168.1.56:5000/command/$identifier');
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},

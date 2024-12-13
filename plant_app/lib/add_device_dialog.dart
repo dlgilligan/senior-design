@@ -103,9 +103,15 @@ class AddDeviceDialog {
     // Connect to the device.
     final connection = flutterReactiveBle
         .connectToDevice(id: deviceId)
-        .listen((connectionState) {
+        .listen((connectionState) async {
       if (connectionState.connectionState == DeviceConnectionState.connected) {
         // Connected to the device, now write the data.
+        try {
+          await flutterReactiveBle.requestMtu(deviceId: deviceId, mtu: 247);
+          print('MTU size set to 247');
+        } catch (e) {
+          print('Failed to set MTU: $e');
+        }
         _writeData(deviceId, ssid, password, identifier, serviceUUID,
             characteristicUUID);
       } else if (connectionState.connectionState ==
@@ -123,6 +129,7 @@ class AddDeviceDialog {
 
   Future<void> _writeData(String deviceId, String ssid, String password,
       String identifier, Uuid serviceUUID, Uuid characteristicUUID) async {
+    print('Identifier: ${identifier}');
     final data = utf8.encode('$ssid,$password,$identifier');
     try {
       await flutterReactiveBle.writeCharacteristicWithoutResponse(
